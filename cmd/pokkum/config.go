@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/CreativeBeastDesign/pokkum/schema"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -74,8 +75,36 @@ func newConfigCommand(_ context.Context, logger *slog.Logger) *cobra.Command {
 	}
 	validateCmd.Flags().StringVarP(&validateOpts.dir, "dir", "d", ".", "Path to project directory")
 
+	// schema prints the generated JSON Schema for .pokkum.yaml. Deliberately
+	// flag-free: it writes one document to stdout, so redirection covers every
+	// use a --out flag would (`pokkum config schema > .pokkum.schema.json`),
+	// and an unused flag would still owe Vocabulary.md an entry.
+	schemaCmd := &cobra.Command{
+		Use:   "schema",
+		Short: "Print the JSON Schema for .pokkum.yaml",
+		Long: `Schema writes the JSON Schema (draft 2020-12) describing .pokkum.yaml to stdout.
+
+It is generated from the same Go types the config loader binds to, and embedded in
+this binary at build time -- so it always describes the configuration THIS version
+accepts, rather than whatever schema a URL happens to serve today.
+
+Point an editor at it, or validate in CI:
+
+    pokkum config schema > .pokkum.schema.json
+
+The schema covers field names, types, enum values and unknown-key rejection. It does
+not encode cross-field rules -- the deploy target/method matrix, or the
+runtime/strategy/base composition -- which pokkum config validate enforces instead.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, err := cmd.OutOrStdout().Write(schema.JSON)
+			return err
+		},
+	}
+
 	cmd.AddCommand(viewCmd)
 	cmd.AddCommand(validateCmd)
+	cmd.AddCommand(schemaCmd)
 
 	return cmd
 }
@@ -93,12 +122,12 @@ func runConfigView(logger *slog.Logger, opts *configViewOptions) error {
 		if os.IsNotExist(err) {
 			msg := fmt.Sprintf("no %s found in %s (run `pokkum init` to create one)", ports.ConfigFilename, opts.dir)
 			if outputFormat == ports.FormatJSON {
-				return jsonutils.WriteError(os.Stdout, "config view", "ERR_CONFIG_NOT_FOUND", msg, "")
+				return failJSON("config view", "ERR_CONFIG_NOT_FOUND", msg, "")
 			}
 			return fmt.Errorf("%s", msg)
 		}
 		if outputFormat == ports.FormatJSON {
-			return jsonutils.WriteError(os.Stdout, "config view", "ERR_CONFIG_PARSE", err.Error(), "")
+			return failJSON("config view", "ERR_CONFIG_PARSE", err.Error(), "")
 		}
 		return err
 	}
@@ -107,7 +136,7 @@ func runConfigView(logger *slog.Logger, opts *configViewOptions) error {
 		merged, err := mgr.ApplyProfile(cfg, opts.profile)
 		if err != nil {
 			if outputFormat == ports.FormatJSON {
-				return jsonutils.WriteError(os.Stdout, "config view", "ERR_INVALID_PROFILE", err.Error(), "")
+				return failJSON("config view", "ERR_INVALID_PROFILE", err.Error(), "")
 			}
 			return err
 		}
@@ -144,7 +173,7 @@ func runConfigValidate(logger *slog.Logger, opts *configValidateOptions) error {
 	if err != nil {
 		msg := fmt.Sprintf("validation failed: %v", err)
 		if outputFormat == ports.FormatJSON {
-			return jsonutils.WriteError(os.Stdout, "config validate", "ERR_CONFIG_INVALID", msg, "")
+			return failJSON("config validate", "ERR_CONFIG_INVALID", msg, "")
 		}
 		return fmt.Errorf("%s", msg)
 	}
